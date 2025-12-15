@@ -118,7 +118,6 @@ Ensure the required datasets (bathymetric profiles, tsunami scenarios) are avail
 ### **Step 2: Create transects**
 This step extracts transects for a specified city using the `get_transects.py` script.
 
-# Run script
 ```bash
 python scripts/get_transects.py --city YOUR_CITY --extension_length 5000 --distance 100 --elevation_threshold 30
 ```
@@ -131,13 +130,13 @@ Parameter Definitions:
 
 Once executed, a bathymetry plot is displayed. The user must click to define the shoreline, which finalizes the transect extraction process.
 
-### **Step 2: The user must decide whether to calibrate the model**
+### **Step 3: The user must decide whether to calibrate the model**
 
 If the user wants to apply the FEGLA method without calibration, the user must go to `FEGLA-Toolkit/notebook/FEGLA_run.ipynb`.
 
 The recommendation is to calibrate the method since it is site-dependent. Then, the user must go to Step 3.
 
-### **Step 3: Obtain flooded transects**
+### **Step 4: Obtain flooded transects**
 After generating the transect data, the next step is to **interpolate the transects** across all inundation maps derived from the Shallow Water Equations (SWE).
 
 ```bash
@@ -152,7 +151,7 @@ Parameter Definitions:
 
 For a given location, thousands of SWE simulations (e.g., 3000) may be available. This script selects n_selected_sim simulations based on mean flooded heights at the shoreline, a key parameter for FEGLA. 
 
-### **Step 4: Executing the Models**
+### **Step 5: Executing the Models**
 To determine the best-fit model, three different parameterizations of the Froude number are tested: **Constant, Squared, and Linear**.
 
 1. **Prepare the JSON configuration file** (`params_inputs_city.json`), which contains the required inputs:
@@ -176,14 +175,14 @@ python script/calibrate_fegla.py --params Arica_inputs.json
 	•	All outputs are saved in the `outputs/YOUR_CITY/calibration` directory 
 	•	The results are stored as .pkl files for further analysis.
 
-## **Step 5: Evaluating the Best-Fit Model**
+## **Step 6: Evaluating the Best-Fit Model**
 After executing all simulations, the next step is to identify the **best-fit FEGLA model** by comparing its results against the **Shallow Water Equations (SWE) simulations**, which serve as a benchmark.
 
 ```bash
 python scripts/area_results.py --city Arica --n_selected_sim 50 --map_format kmz
 ```
 
-## **Step 6: Testing the Best-Fit Model**
+## **Step 7: Testing the Best-Fit Model**
 The user must go to `FEGLA-Toolkit/notebook/FEGLA_run.ipynb` and set all parameters related to the best-fit model
 
 ## Authors
