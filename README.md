@@ -175,14 +175,14 @@ python script/calibrate_fegla.py --params Arica_inputs.json
 	•	All outputs are saved in the `outputs/YOUR_CITY/calibration` directory 
 	•	The results are stored as .pkl files for further analysis.
 
-## **Step 6: Evaluating the Best-Fit Model**
+### **Step 6: Evaluating the Best-Fit Model**
 After executing all simulations, the next step is to identify the **best-fit FEGLA model** by comparing its results against the **Shallow Water Equations (SWE) simulations**, which serve as a benchmark.
 
 ```bash
 python scripts/area_results.py --city Arica --n_selected_sim 50 --map_format kmz
 ```
 
-## **Step 7: Testing the Best-Fit Model**
+### **Step 7: Testing the Best-Fit Model**
 The user must go to `FEGLA-Toolkit/notebook/FEGLA_run.ipynb` and set all parameters related to the best-fit model
 
 ## Authors
