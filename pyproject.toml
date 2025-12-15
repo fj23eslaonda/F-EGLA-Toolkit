@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tsunamicore"
+version = "0.1.0"
+description = "Core utilities for the FEGLA tsunami hazard toolkit"
+authors = [{ name = "Francisco Sáez" }]
+readme = "README.md"
+requires-python = ">=3.9"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tsunamicore*"]

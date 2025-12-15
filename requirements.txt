@@ -1,0 +1,17 @@
+numpy
+pandas
+matplotlib
+scipy
+scikit-image
+seaborn
+xarray
+tqdm
+joblib
+scikit-learn
+netCDF4
+tables
+pyarrow
+shapely
+pyproj
+geopandas 
+simplekml
