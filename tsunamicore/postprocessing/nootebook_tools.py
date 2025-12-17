@@ -182,6 +182,8 @@ def run_FEGLA(transectData, params, production_path, tolerance=0.01, verbose=Tru
     # -----------------------------
     return results_all, errors_all
 
+#--------------------------------------------------------
+#--------------------------------------------------------
 def merge_height(transectData, results, col_name="height"):
     """
     Merge FEGLA 'height' results into each transect DataFrame.
@@ -234,7 +236,8 @@ def merge_height(transectData, results, col_name="height"):
 
     return merged
 
-
+#--------------------------------------------------------
+#--------------------------------------------------------
 def calculate_polygon_and_area(first_points, last_points):
     """
     Optimized version:
@@ -255,7 +258,8 @@ def calculate_polygon_and_area(first_points, last_points):
     
     return polygon_proj, area_m2
 
-
+#--------------------------------------------------------
+#--------------------------------------------------------
 def get_boundary_points(data, column):
     """
     Extracts boundary (first / last) points from each flooded transect and computes
@@ -305,7 +309,8 @@ def get_boundary_points(data, column):
 
     return polygonSim, aream2Sim
 
-
+#--------------------------------------------------------
+#--------------------------------------------------------
 def plot_flood_maps(
     city: str,
     data_path: Path,
@@ -481,6 +486,8 @@ def plot_flood_maps(
 
     return polygons_dict, areas_dict
 
+#--------------------------------------------------------
+#--------------------------------------------------------
 def save_all_flood_polygons(
     city: str,
     polygons: dict,               # {hmax_value : polygon_utm}
@@ -587,6 +594,8 @@ def save_all_flood_polygons(
 
     print("\nAll flood polygons exported successfully!\n")
 
+#--------------------------------------------------------
+#--------------------------------------------------------
 def _as_geom(obj):
     """
     Safely convert an object into a shapely geometry.
@@ -599,7 +608,8 @@ def _as_geom(obj):
     except Exception:
         raise ValueError(f"Cannot convert object to geometry: {obj}")
 
-
+#--------------------------------------------------------
+#--------------------------------------------------------
 def _to_multipolygon(geom):
     """
     Ensures the geometry is always a shapely MultiPolygon.
@@ -610,6 +620,8 @@ def _to_multipolygon(geom):
         return MultiPolygon([geom])
     raise ValueError(f"Cannot convert to MultiPolygon: {geom}")
 
+#--------------------------------------------------------
+#--------------------------------------------------------
 def _hex_to_rgba(hex_color, a=255):
     """
     Convert a hex color string (#RRGGBB) into (r, g, b, a) integers.
@@ -624,7 +636,9 @@ def _hex_to_rgba(hex_color, a=255):
     b = int(hex_color[4:6], 16)
     return r, g, b, a
 
-def load_transects(transect_path: Path):
+#--------------------------------------------------------
+#--------------------------------------------------------
+def load_transects(transect_path: Path, mode='FEGLA'):
     """
     Load all transects from a single HDF5 file and return a dict.
     Assumes file name: 'Transects_data.h5'
@@ -632,7 +646,10 @@ def load_transects(transect_path: Path):
     Returns:
         dict: { 'T001': df, 'T002': df, ... }
     """
-    h5_file = transect_path / "Transects_data.h5"
+    if mode == 'FEGLA':
+        h5_file = transect_path / f"{mode}_transects_data.h5"
+    else:
+        h5_file = transect_path / f"{mode}_transects_data.h5"
 
     print("Loading transects...")
 
@@ -645,6 +662,8 @@ def load_transects(transect_path: Path):
     print(f"Loaded {len(transects)} transects.")
     return transects
 
+#--------------------------------------------------------
+#--------------------------------------------------------
 def build_project_paths(city: str):
     """
     Creates and returns all required FEGLA paths in a clean structure:
@@ -664,11 +683,203 @@ def build_project_paths(city: str):
         "production_path": root / "outputs" / city / "production",
         "transect_path"  : root / "outputs" / city / "transects",
         "data_path"      : root / "data"   / city,
+        "EGLA_production": root / "outputs" / city / "production" / 'EGLA',
+        "FEGLA_production": root / "outputs" / city / "production" / 'FEGLA'
     }
 
     # Create directories that must exist
     paths["output_path"].mkdir(parents=True, exist_ok=True)
     paths["production_path"].mkdir(parents=True, exist_ok=True)
+    paths["EGLA_production"].mkdir(parents=True, exist_ok=True)
+    paths["FEGLA_production"].mkdir(parents=True, exist_ok=True)
     paths["transect_path"].mkdir(parents=True, exist_ok=True)
 
     return paths
+
+#--------------------------------------------------------
+#--------------------------------------------------------
+def EGLA_run(transectData, mode, F0, FR, manning):
+    h_dict = dict()
+    v_dict = dict()
+    Fr_dict = dict()
+
+    for key, transect in transectData.items():
+
+        print(f"\n==========================================")
+        print(f" Running EGLA for transect = {key}")
+        print(f"==========================================\n")
+        g              = 9.81  # gravity constant
+        delta_x        = -1.0  # delta x for computations
+        z              = transect['elevation'].values
+        manning_list   = manning*np.ones(len(transect))
+        h0_runup       = 0
+        cum_distance   = transect['cum_distance'].values
+
+        X_R_used = cum_distance[-1] # Store XR as fixed for this iteration (avoid mid-iteration changes)
+
+        # Calculate number of segments (N) and dx spacing based on XR
+        N = int(np.round(X_R_used))
+        delta_x = - X_R_used / N  # Negative because the integration moves leftward
+
+        # Create new distance array with the updated dx
+        new_distance = np.linspace(0, X_R_used, N + 1)
+
+        # Interpolate elevation and Manning values onto the new distance grid
+        z = np.interp(new_distance, cum_distance, z)
+        manning_intep = np.interp(new_distance, cum_distance, manning_list)
+
+        # Trim distance to match XR
+        distance_dummy = new_distance[new_distance <= X_R_used]
+
+        # Update local Froude numbers across the profile
+        if mode == 'linear':
+            Fr = F0 + (FR - F0) * distance_dummy / X_R_used
+        elif mode == 'squared':
+            Fr = F0 * (distance_dummy / X_R_used) ** 2
+        elif mode == 'constant':
+            Fr = np.full_like(distance_dummy, F0)
+        else:
+            raise ValueError(f"Invalid froude_mode: {mode}")
+
+        h_list = np.full(distance_dummy.size, np.nan)
+        h_list[-1] = h0_runup
+        v_list = np.full(distance_dummy.size, np.nan)
+        v_list[-1] = 0
+
+        # Integrate from right (runup) to left (towards shoreline)
+        for i in range(len(distance_dummy) - 1, 0, -1):
+            z_next, z_prev = z[i - 1], z[i]
+            h_prev = h_list[i]
+            Fr_next, Fr_prev = Fr[i - 1], Fr[i]
+            manning_coeff = manning_intep[i - 1]
+
+            # Velocity based on Froude number and depth
+            u_prev = Fr_prev * np.sqrt(g * h_prev) if h_prev >= 0 else 0
+            v_list[i] = u_prev
+
+            # Compute energy and losses
+            energy_i = z_prev + h_prev + 0.5 * Fr_prev**2 * h_prev
+            loss_i = (g * Fr_next**2 * manning_coeff**2 * delta_x) / (h_prev**(1/3)) if h_prev > 0 else 0
+
+            # Estimate next water depth
+            h_next = 1 / (1 + 0.5 * Fr_next**2) * (energy_i - loss_i - z_next)
+            h_next = max(h_next, 0)  # Ensure non-negative depth
+
+            h_list[i - 1] = h_next
+            v_list[i - 1] = Fr_next * np.sqrt(g * h_next) if h_next >= 0 else 0
+
+        print(
+            f" Shoreline values:\n"
+            f"   h(0)  = {h_list[0]:6.3f} m\n"
+            f"   u(0)  = {v_list[0]:6.3f} m/s\n"
+            f"   Fr(0) = {Fr[0]:6.3f}"
+        )            
+
+        h_dict[key] = h_list
+        v_dict[key] = v_list
+        Fr_dict[key] = Fr
+
+    return h_dict, v_dict, Fr_dict
+
+#--------------------------------------------------------
+#--------------------------------------------------------
+def EGLA_merge_variables(transectData, h_dict, v_dict, Fr_dict):
+    """
+    Adds flow height, velocity, and Froude number to a transect DataFrame.
+    """
+    for key, transect in transectData.items():
+        transect['height'] = pd.Series(h_dict[key])
+        transect['velocity'] = pd.Series(v_dict[key])
+        transect['froude'] = pd.Series(Fr_dict[key])
+
+    return transectData
+
+#--------------------------------------------------------
+#--------------------------------------------------------
+def plot_EGLA_transect_profile(transect, key, paths, figsize=(12, 7)):
+    """
+    Plots hydrodynamic profiles (flow height, velocity, and Froude number)
+    along a transect.
+
+    Parameters
+    ----------
+    transect : pandas.DataFrame
+        Transect DataFrame containing columns:
+        ['cum_distance', 'elevation', 'height', 'velocity', 'froude'].
+    key : str
+        Transect identifier (e.g., 'T001').
+    figsize : tuple, optional
+        Figure size (width, height).
+    """
+
+    x = transect['cum_distance'].values
+    z = transect['elevation'].values
+
+    fig, ax = plt.subplots(3, 1, figsize=figsize, sharex=True)
+
+    # -------------------------------------------------
+    # Flow height
+    # -------------------------------------------------
+    ax[0].plot(x, z, c='k', lw=2)
+    ax[0].plot(x, z + transect['height'], c='#1f77b4', lw=2)
+    ax[0].fill_between(
+        x, z, z + transect['height'],
+        color='#1f77b4', alpha=0.3
+    )
+    ax[0].set_ylabel('Flow height [m]')
+    ax[0].grid(ls='--', lw=0.5, alpha=0.3, c='gray')
+
+    # -------------------------------------------------
+    # Velocity
+    # -------------------------------------------------
+    ax[1].plot(x, np.zeros_like(z), c='k', lw=2)
+    ax[1].plot(x, transect['velocity'], c='#ff7f0e', lw=2)
+    ax[1].fill_between(
+        x, 0, transect['velocity'],
+        color='#ff7f0e', alpha=0.3
+    )
+    ax[1].set_ylabel('Flow velocity [m/s]')
+    ax[1].grid(ls='--', lw=0.5, alpha=0.3, c='gray')
+
+    # -------------------------------------------------
+    # Froude number
+    # -------------------------------------------------
+    ax[2].plot(x, np.zeros_like(z), c='k', lw=2)
+    ax[2].plot(x, transect['froude'], c='#2ca02c', lw=2)
+    ax[2].fill_between(
+        x, 0, transect['froude'],
+        color='#2ca02c', alpha=0.3
+    )
+    ax[2].set_ylabel('Froude number [-]')
+    ax[2].set_xlabel('Cumulative distance [m]')
+    ax[2].grid(ls='--', lw=0.5, alpha=0.3, c='gray')
+
+    # -------------------------------------------------
+    # Global title
+    # -------------------------------------------------
+    fig.suptitle(
+        f'Transect {key} – Hydrodynamic profile',
+        y=0.92
+    )
+
+    outfig_path = paths['EGLA_production'] / 'figs'
+    outfig_path.mkdir(parents=True, exist_ok=True)
+
+    fig.savefig(
+    outfig_path / f"EGLA_Transect_{key}_hydrodynamic_profile.png",
+    dpi=300,
+    bbox_inches="tight"
+    )
+
+    plt.show()
+
+#--------------------------------------------------------
+#--------------------------------------------------------
+def save_EGLA_results_csv(transectData, paths):
+    """
+    Saving EGLA results as csv transect-by-transect
+    """
+    for key, transect in transectData.items():
+        transect.to_csv(paths['EGLA_production'] / f'Transect_{key}.csv', index=False)
+    
+    return print('Results have been saved!')

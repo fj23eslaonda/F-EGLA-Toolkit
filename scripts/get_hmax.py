@@ -77,7 +77,7 @@ def main(city, n_selected_sim):
 
     # Load transect data
     print('\nLoading transects...')
-    with pd.HDFStore(transect_path / 'Transects_data.h5', mode="r") as h5_store:
+    with pd.HDFStore(transect_path / 'FEGLA_transects_data.h5', mode="r") as h5_store:
         transectData = {key.lstrip('/'): h5_store[key] for key in h5_store.keys()}
     print(f'N° of transects: {len(transectData.keys())}')
 

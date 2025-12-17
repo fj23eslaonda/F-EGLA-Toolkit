@@ -14,6 +14,9 @@ import matplotlib.colors as mcolors
 import matplotlib.cm as cm
 from matplotlib import ticker
 import matplotlib.patheffects as pe
+from shapely.geometry import LineString, Point
+from shapely.ops import nearest_points
+from pyproj import Geod
 
 from tsunamicore.utils.plot_style import apply_plot_style
 apply_plot_style()
@@ -522,7 +525,7 @@ def manual_shoreline_definition(
 
 #-------------------------------------------------------
 #-------------------------------------------------------
-def plot_transect_elevations(transect_dict, outfigPath):
+def plot_transect_elevations(transect_dict, outfigPath, mode='FEGLA'):
     """
     Plots the elevation profiles for each transect in two panels:
     - Full transect profile
@@ -590,7 +593,10 @@ def plot_transect_elevations(transect_dict, outfigPath):
     # Final layout adjustments
     fig.subplots_adjust(hspace=0.25)
     plt.tight_layout()
-    plt.savefig(outfigPath / f"Transect_elevation.png", dpi=300, bbox_inches='tight', format='png')
+    if mode == 'EGLA':
+        plt.savefig(outfigPath / f"{mode}_transect_elevation.png", dpi=300, bbox_inches='tight', format='png')
+    else:
+        plt.savefig(outfigPath / f"FEGLA_transect_elevation.png", dpi=300, bbox_inches='tight', format='png')
 
     plt.show(block=False)
 
@@ -639,7 +645,7 @@ def plot_slope_distribution(transect_dict, outfigPath):
     plt.grid(True, linestyle="--", alpha=0.6)
     plt.tight_layout()
     plt.xlim(left=0)
-    plt.savefig(outfigPath / "Slope_distribution.png", dpi=300, bbox_inches='tight')
+    plt.savefig(outfigPath / "FELGA_slope_distribution.png", dpi=300, bbox_inches='tight')
     plt.show(block=False)
 
 #-------------------------------------------------------
@@ -738,6 +744,410 @@ def plot_transects_over_topobathy(
     axs.set_title(f'Number of transects: {len(transect_dict)}')
 
     plt.tight_layout()
-    plt.savefig(outfigPath / f"Transects_over_topobathy.png", dpi=300, bbox_inches='tight', format='png')
+    plt.savefig(outfigPath / f"FEGLA_transects_over_topobathy.png", dpi=300, bbox_inches='tight', format='png')
     # Show plot
+    plt.show(block=False)
+
+
+#-------------------------------------------------------
+#-------------------------------------------------------
+
+def manual_transect_definition(
+    grid_lon,
+    grid_lat,
+    bathy,
+    flooded_gdf,
+    alpha=1.0
+):
+    """
+    Allows the user to manually define multiple transects by clicking two points
+    over a topobathymetry map and a flooded-area polygon (KMZ).
+    The user presses Enter to finalize each transect.
+
+    Parameters
+    ----------
+    grid_lon, grid_lat : 2D arrays
+        Longitude and latitude grids.
+    bathy : 2D array
+        Bathymetry / topography values.
+    flooded_kmz : str or Path
+        Path to KMZ file defining the flooded area.
+    alpha : float
+        Transparency of bathymetry plot.
+
+    Returns
+    -------
+    transects : list of shapely.geometry.LineString
+        List of transect geometries.
+    clicked_points : list of np.ndarray
+        List of raw user-clicked points for each transect.
+    """
+    # -------------------------------------------------
+    # Helper: snap to flooded boundary
+    # -------------------------------------------------
+    def snap_to_flood_boundary(x, y, flood_polygon):
+        click_point = Point(x, y)
+        snapped = nearest_points(click_point, flood_polygon.boundary)[1]
+        return snapped.x, snapped.y
+    
+    # -------------------------------------------------
+    # Colormap definition (FEGLA style)
+    # -------------------------------------------------
+    LEVELS = [-100, -50, -30, -20, -10, 0, 5, 10, 20, 30, 50, 100]
+    i0 = LEVELS.index(0)
+
+    bathy_cmap = plt.cm.GnBu
+    topo_cmap  = plt.cm.gist_gray_r
+
+    blues = bathy_cmap(np.linspace(0.2, 1, i0))
+    grays = topo_cmap(np.linspace(0.2, 1, len(LEVELS) - i0 - 1))
+    colors = np.vstack([blues, grays])
+
+    cmap = mcolors.ListedColormap(colors)
+    cmap.set_under(colors[0])
+    cmap.set_over(colors[-1])
+
+    norm = mcolors.BoundaryNorm(LEVELS, cmap.N, clip=True)
+
+    # -------------------------------------------------
+    # Plot bathymetry
+    # -------------------------------------------------
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    cf = ax.contourf(
+        grid_lon, grid_lat, bathy,
+        levels=LEVELS,
+        cmap=cmap,
+        norm=norm,
+        alpha=alpha,
+        extend="both"
+    )
+
+    cs = ax.contour(
+        grid_lon, grid_lat, bathy,
+        levels=LEVELS,
+        colors="black",
+        linewidths=0.5
+    )
+    ax.clabel(cs, inline=True, fontsize=8, fmt="%.0f")
+
+    cbar = fig.colorbar(cf, ax=ax, extend="both", shrink=0.8)
+    cbar.set_label("Topobathymetry [m]")
+    cbar.locator = ticker.FixedLocator(LEVELS)
+    cbar.update_ticks()
+
+    # -------------------------------------------------
+    # Flooded area
+    # -------------------------------------------------
+    flood_poly = flooded_gdf.unary_union
+
+    flooded_gdf.plot(
+        ax=ax,
+        facecolor="#ff7300",
+        edgecolor="k",
+        alpha=0.4,
+        linewidth=1.5
+    )
+
+    ax.set_title(
+        "Click TWO points (snapped to flooded boundary)\n"
+        "ENTER = confirm transect | ESC = finish"
+    )
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    ax.set_aspect("equal")
+
+    plt.tight_layout()
+    plt.draw()
+
+    # -------------------------------------------------
+    # Interactive state
+    # -------------------------------------------------
+    current_points = []
+    transects = []
+    raw_points = []
+    awaiting_enter = False
+
+    # -------------------------------------------------
+    # Mouse click handler
+    # -------------------------------------------------
+    def on_click(event):
+        nonlocal awaiting_enter
+
+        if event.inaxes != ax or awaiting_enter:
+            return
+        if event.xdata is None or event.ydata is None:
+            return
+
+        # SNAP CLICK TO FLOODED BOUNDARY
+        sx, sy = snap_to_flood_boundary(
+            event.xdata,
+            event.ydata,
+            flood_poly
+        )
+
+        current_points.append((sx, sy))
+
+        # Plot snapped point
+        ax.plot(sx, sy, "ro", zorder=20)
+        fig.canvas.draw_idle()
+
+        if len(current_points) == 2:
+            awaiting_enter = True
+            print("✔ Two snapped points selected. Press ENTER to confirm.")
+
+    # -------------------------------------------------
+    # Key press handler
+    # -------------------------------------------------
+    def on_key(event):
+        nonlocal awaiting_enter, current_points
+
+        # ENTER → confirm transect
+        if event.key == "enter" and awaiting_enter:
+            line = LineString(current_points)
+
+            transects.append(line)
+            raw_points.append(np.array(current_points))
+
+            ax.plot(*line.xy, color="red", linewidth=2.5, zorder=21)
+            fig.canvas.draw_idle()
+
+            print(f"Transect {len(transects)} created.")
+
+            current_points.clear()
+            awaiting_enter = False
+
+        # ESC → finish
+        elif event.key == "escape":
+            print("Transect definition finished.")
+            plt.close(fig)
+
+    # -------------------------------------------------
+    # Connect events
+    # -------------------------------------------------
+    fig.canvas.mpl_connect("button_press_event", on_click)
+    fig.canvas.mpl_connect("key_press_event", on_key)
+
+    plt.show()
+
+    return transects, raw_points
+
+#-------------------------------------------------------
+#-------------------------------------------------------
+geod = Geod(ellps="WGS84")
+
+def discretize_transect_geodesic(line, spacing=1.0):
+    """
+    Discretize a 2-point LineString in WGS84 at ~spacing (meters).
+
+    Parameters
+    ----------
+    line : shapely.LineString
+        Transect defined by two points (lon, lat).
+    spacing : float
+        Spacing in meters.
+
+    Returns
+    -------
+    lon : np.ndarray
+    lat : np.ndarray
+    dist : np.ndarray
+        Cumulative distance in meters.
+    """
+    (lon1, lat1), (lon2, lat2) = line.coords
+
+    az12, _, dist_total = geod.inv(lon1, lat1, lon2, lat2)
+
+    n = max(int(dist_total // spacing), 1)
+    distances = np.linspace(0.0, dist_total, n + 1)
+
+    lon = np.empty(n + 1)
+    lat = np.empty(n + 1)
+
+    for i, d in enumerate(distances):
+        lon[i], lat[i], _ = geod.fwd(lon1, lat1, az12, d)
+
+    return lon, lat, distances
+
+#-------------------------------------------------------
+#-------------------------------------------------------
+def ensure_low_to_high(df):
+    """
+    Ensure transect goes from lower to higher elevation
+    and recompute cumulative distance accordingly.
+    """
+    if df["elevation"].iloc[0] > df["elevation"].iloc[-1]:
+        df = df.iloc[::-1].reset_index(drop=True)
+
+    # recompute distance so it starts at 0
+    df["cum_distance"] = df["cum_distance"] - df["cum_distance"].iloc[0]
+
+    return df
+#-------------------------------------------------------
+#-------------------------------------------------------
+def build_transect_dictionary(transects, bathy, spacing=1.0):
+    """
+    Build a dictionary of discretized transects interpolated over topo-bathy.
+
+    Parameters
+    ----------
+    transects : list of shapely.LineString
+        User-defined transects (WGS84).
+    bathy : xarray.DataArray
+        Bathymetry/topography dataset.
+    spacing : float
+        Discretization spacing (meters).
+
+    Returns
+    -------
+    dict
+        {
+          'T001': DataFrame(lon, lat, elevation, cumulative_distance_m),
+          'T002': DataFrame(...),
+          ...
+        }
+    """
+
+    transect_dict = {}
+
+    for i, line in enumerate(transects, start=1):
+
+        tid = f"T{i:03d}"
+
+        lon_i, lat_i, dist_i = discretize_transect_geodesic(
+            line, spacing=spacing
+        )
+
+        elevation = np.array([
+            elevation_function(bathy, lo, la)
+            for lo, la in zip(lon_i, lat_i)
+        ])
+
+        df = pd.DataFrame({
+            "lon": lon_i,
+            "lat": lat_i,
+            "elevation": elevation,
+            "cum_distance": dist_i
+        })
+
+        # ensure correct direction + distance
+        df = ensure_low_to_high(df)
+
+        # optional rounding
+        df["cum_distance"] = np.abs(df["cum_distance"].round(0))
+        df["elevation"] = df["elevation"].round(2)
+
+        transect_dict[tid] = df
+
+    return transect_dict
+
+#-------------------------------------------------------
+#-------------------------------------------------------
+def plot_user_transects_over_topobathy(
+    grid_lon,
+    grid_lat,
+    bathy,
+    transect_dict,
+    outfigPath,
+    alpha=0.6
+):
+    """
+    Plots topobathymetry with contour lines and user-defined transects.
+
+    Parameters
+    ----------
+    grid_lon, grid_lat : 2D arrays
+        Coordinates of the grid.
+    bathy : 2D array
+        Bathymetric elevation data.
+    transect_dict : dict
+        Dictionary of transects:
+        { 'T001': DataFrame(lon, lat, elevation, cumulative_distance_m), ... }
+    outfigPath : Path
+        Output directory for saving the figure.
+    alpha : float
+        Transparency for bathymetry plot.
+    """
+    # -------------------------------------------------
+    # Create figure
+    # -------------------------------------------------
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    # -------------------------------------------------
+    # Plot topobathymetry (reuse your internal function)
+    # -------------------------------------------------
+    ax, cp = plot_topobathymetry_and_contours(
+        grid_lon,
+        grid_lat,
+        bathy,
+        z0_contour=None,   # no shoreline needed anymore
+        ax=ax,
+        alpha=alpha
+    )
+
+    # -------------------------------------------------
+    # Colormap for transects
+    # -------------------------------------------------
+    num_transects = len(transect_dict)
+    cmap = cm.get_cmap("magma")
+    norm = mcolors.Normalize(vmin=0, vmax=max(num_transects - 1, 1))
+
+    # -------------------------------------------------
+    # Plot transects
+    # -------------------------------------------------
+    for ix, (tid, df) in enumerate(transect_dict.items()):
+        line_lon = df["lon"].values
+        line_lat = df["lat"].values
+
+        line, = ax.plot(
+            line_lon,
+            line_lat,
+            lw=2,
+            color=cmap(norm(ix)),
+            label=tid
+        )
+
+        # Black outline for readability
+        line.set_path_effects([
+            pe.Stroke(linewidth=3, foreground="black"),
+            pe.Normal()
+        ])
+
+    # -------------------------------------------------
+    # Colorbars
+    # -------------------------------------------------
+    divider = make_axes_locatable(ax)
+
+    # Elevation colorbar
+    CUSTOM_LEVELS = [-100, -50, -30, -20, -10, 0, 5, 10, 20, 30, 50, 100]
+    cax1 = divider.append_axes("right", size="5%", pad=0.1)
+    cbar1 = fig.colorbar(cp, cax=cax1, ticks=CUSTOM_LEVELS)
+    cbar1.set_label("Elevation [m]")
+
+    # Transect ID colorbar
+    sm = cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+
+    cax2 = divider.append_axes("right", size="5%", pad=0.9)
+    ticks = np.arange(num_transects)
+    cbar2 = fig.colorbar(sm, cax=cax2, ticks=ticks)
+
+    transect_keys = list(transect_dict.keys())
+    cbar2.ax.set_yticklabels(transect_keys)
+    cbar2.set_label("Transect ID")
+
+    # -------------------------------------------------
+    # Final formatting
+    # -------------------------------------------------
+    ax.set_xlim(grid_lon.min(), grid_lon.max())
+    ax.set_ylim(grid_lat.min(), grid_lat.max())
+    ax.set_aspect("equal")
+    ax.set_title(f"User-defined transects ({num_transects})")
+
+    plt.tight_layout()
+    plt.savefig(
+        outfigPath / "EGLA_transects_over_topobathy.png",
+        dpi=300,
+        bbox_inches="tight"
+    )
     plt.show(block=False)
