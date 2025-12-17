@@ -1,4 +1,4 @@
-# <span style="font-size:34px; font-style:italic;">F-EGLA: A Python Toolkit for Rapid Estimation of Tsunami-Induced Flooded Areas</span>
+# <span style="font-size:34px; font-style:italic;">F-EGLA: A Python Toolkit for Tsunami Inundation Mapping and Transect-Based Hydrodynamic Analysis</span>
 
 ### <span style="font-size:14px; font-weight:600;">Authors:</span>
 
